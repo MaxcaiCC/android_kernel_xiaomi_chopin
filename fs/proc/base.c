@@ -94,9 +94,6 @@
 #include <linux/flex_array.h>
 #include <linux/posix-timers.h>
 #include <linux/cpufreq_times.h>
-#ifdef CONFIG_KSU_SUSFS_SUS_MAP
-#include <linux/susfs_def.h>
-#endif
 #ifdef CONFIG_HARDWALL
 #include <asm/hardwall.h>
 #endif
@@ -855,9 +852,6 @@ static ssize_t mem_rw(struct file *file, char __user *buf,
 	ssize_t copied;
 	char *page;
 	unsigned int flags;
-#ifdef CONFIG_KSU_SUSFS_SUS_MAP
-	struct vm_area_struct *vma;
-#endif
 
 	if (!mm)
 		return 0;
@@ -874,24 +868,6 @@ static ssize_t mem_rw(struct file *file, char __user *buf,
 
 	while (count > 0) {
 		int this_len = min_t(int, count, PAGE_SIZE);
-#ifdef CONFIG_KSU_SUSFS_SUS_MAP
-		vma = find_vma(mm, addr);
-		if (vma && vma->vm_file) {
-			struct inode *inode = file_inode(vma->vm_file);
-			if (unlikely(test_bit(AS_FLAGS_SUS_MAP, &inode->i_mapping->flags) &&
-				susfs_is_current_proc_umounted()))
-			{
-				if (write) {
-					copied = -EFAULT;
-				} else {
-					copied = -EIO;
-				}
-				*ppos = addr;
-				mmput(mm);
-				goto free;
-			}
-		}
-#endif
 
 		if (write && copy_from_user(page, buf, this_len)) {
 			copied = -EFAULT;
@@ -1001,6 +977,7 @@ static ssize_t environ_read(struct file *file, char __user *buf,
 	while (count > 0) {
 		size_t this_len, max_len;
 		int retval;
+
 		if (src >= (env_end - env_start))
 			break;
 
@@ -2088,17 +2065,11 @@ static int map_files_get_link(struct dentry *dentry, struct path *path)
 	rc = -ENOENT;
 	down_read(&mm->mmap_sem);
 	vma = find_exact_vma(mm, vm_start, vm_end);
-        if (vma) {
-        if (vma->vm_file) {
-            if (strstr(vma->vm_file->f_path.dentry->d_name.name, "lineage")) { 
-                                rc = kern_path("/system/framework/framework-res.apk", LOOKUP_FOLLOW, path);
-                        } else {
-                                *path = vma->vm_file->f_path;
-                                path_get(path);
-                                rc = 0;
-            }
-        }
-    }
+	if (vma && vma->vm_file) {
+		*path = vma->vm_file->f_path;
+		path_get(path);
+		rc = 0;
+	}
 	up_read(&mm->mmap_sem);
 
 out_mmput:
@@ -2277,13 +2248,6 @@ proc_map_files_readdir(struct file *file, struct dir_context *ctx)
 				vma = vma->vm_next) {
 			if (!vma->vm_file)
 				continue;
-#ifdef CONFIG_KSU_SUSFS_SUS_MAP
-		if (unlikely(test_bit(AS_FLAGS_SUS_MAP, &file_inode(vma->vm_file)->i_mapping->flags) &&
-			susfs_is_current_proc_umounted()))
-		{
-			continue;
-		}
-#endif
 			if (++pos <= ctx->pos)
 				continue;
 
